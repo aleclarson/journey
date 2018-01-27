@@ -1,0 +1,8 @@
+{
+  "name": "journey",
+  "version": "1.0.0",
+  "dependencies": {
+    "emitter": "^1.0.0",
+    "next-tick": "^1.0.0"
+  }
+}
