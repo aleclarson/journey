@@ -1,230 +1,226 @@
-
-import nextTick from 'next-tick'
-import Emitter from 'emitter'
-
-// Timestamp used for session tracking.
-const _sessionId = Date.now();
-
-let _path = getPath(location.hash);
-let _state = null;
-let _depth = 0;
-
-_state = createState();
-history.replaceState(_state, _state.pageTitle, _path);
+const nextTick = require('next-tick');
 
 const journey = exports;
 
-Object.defineProperty(journey, 'state', {
+// Timestamp used for session tracking.
+const _session = Date.now();
+
+// The current path and its state.
+let _path = getPath();
+let _state = createState();
+
+// The chain of path states.
+const _chain = [_state];
+
+// Our position in the chain.
+let _index = 0;
+
+// Register the initial state.
+history.replaceState(_state, _state.title, _path);
+
+//
+// Properties
+//
+
+const d = Object.defineProperty;
+
+d(journey, 'chain', {
+  enumerable: true,
+  value: _chain,
+});
+
+d(journey, 'index', {
+  enumerable: true,
+  get: () => _index,
+});
+
+d(journey, 'state', {
   enumerable: true,
   get: () => _state,
-  set(state) {
-    this.here(_path, state);
-  }
+  set: setState,
 });
 
-Object.defineProperty(journey, 'depth', {
+d(journey, 'title', {
   enumerable: true,
-  get: () => _depth,
-  set() {
-    throw Error('Cannot set `depth` manually');
+  get: () => _state.title,
+  set(title) {
+    document.title = _state.title = title;
+    history.replaceState(_state, title, _path);
   }
+})
+
+d(journey, 'origin', {
+  enumerable: true,
+  value: _path,
 });
 
-journey.origin = _path;
+//
+// Methods
+//
 
-journey.here = function() {
-  if (arguments.length) {
-    const [path, state] = arguments;
-    return updatePath(path, state, false);
-  }
-  return _path;
-};
+journey.is = (path) => _path == path;
+journey.get = () => _path;
 
-journey.isHere = (pattern) => {
-  if (typeof pattern == 'string') {
-    return _path == pattern;
-  }
-  return pattern.test(_path);
-};
+journey.set = updater('set', 'replaceState');
+journey.push = updater('push', 'pushState');
 
-journey.visit = (path, state) =>
-  updatePath(path, state, true);
-
-journey.back = () =>
-  _depth > 0 && history.back();
+journey.back = history.back.bind(history);
+journey.forward = history.forward.bind(history);
 
 //
 // Events
 //
 
-// Path observers are called whenever the current path is changed.
-// These functions can return a function to handle the change event
-// and they can even stop the propagation of an event.
-const observers = [];
+let observer = Function.prototype;
+journey.observe = (fn) => {observer = nextTick.bind(0, fn)};
 
-const events = ['set', 'push', 'pop'];
-const emitter = new Emitter(events);
-
-journey.emit = (eventId, state) => {
-  if (events.indexOf(eventId) < 0) {
-    throw Error(`Unknown path event: "${eventId}"`)
+const eventTypes = ['set', 'push', 'back', 'forward'];
+journey.emit = (eventType, state) => {
+  if (eventTypes.indexOf(eventType) == -1) {
+    throw Error(`Unknown path event: "${eventType}"`);
   }
-  if (state) {
-    Object.assign(_state, state);
-    history.replaceState(_state, _state.pageTitle, _path);
-  }
-  emit(eventId, null);
-};
-
-journey.on = function(eventId, listener) {
-  emitter.on(eventId, listener);
-  return () => emitter.off(eventId, listener);
-};
-
-journey.observe = function(pattern, listener) {
-  observers.push(createMatcher(pattern, listener));
+  if (state) setState(state);
+  observer(eventType, _state);
 };
 
 //
-// Helpers
+// Internal
 //
 
+// Listen for native back/forward events.
 window.addEventListener('popstate', function({ state }) {
 
-  // The hash was changed manually.
-  if (!state) {
-    state = createState();
+  // The state is falsy when the hash is changed via the URL bar.
+  if (!state) state = createState();
+
+  // Remember the previous index.
+  const index = _index;
+
+  _path = getPath();
+  _state = insertState(state);
+
+  // Is this state from an old session?
+  if (state == _state) {
+    state.session = null;
   }
 
-  // Detect if `state` is from another session.
-  else if (state.sessionId != _sessionId) {
-    return location.reload();
-  }
+  // Let the observer know what happened.
+  observer(index < _index ? 'forward' : 'back', state);
 
-  // Webkit cannot prevent scroll event caused by popstate.
-  if (!isEnv('webkit')) {
-    const scrollY = scroll.y;
-    requestAnimationFrame(() => {
-      scroll.y = scrollY;
-    });
-  }
-
-  const previous = _path;
-  _path = getPath(location.hash);
-  _state = state;
-
-  // Use the depth to determine event type.
-  const eventId = state.depth > _depth ? 'push' : 'pop';
-  _depth = state.depth;
-
-  emit(eventId, previous);
+  // Adopt the orphan after the observer.
+  if (!state.session) nextTick(() => {
+    state.session = _session;
+    if (state == _state) {
+      history.replaceState(state, state.title, _path);
+    }
+  });
 });
 
-// Get current path with an optional hash.
-function getPath(hash) {
+// Get the relative href and optionally replace the #? string.
+function getPath(query) {
   const path = location.pathname;
-  if (!hash) return path;
-  return path == '/' ? hash : path + hash;
+  return path + (query || location.hash + location.search);
 }
 
-function updatePath(path, state, isPush) {
-  if (path[0] == '#') {
-    path = getPath(path);
-  }
-  if (path != _path) {
-    const previous = _path;
-    _path = path;
-
-    if (isPush) _depth += 1;
-    _state = createState(state);
-
-    if (isPush) {
-      history.pushState(_state, _state.pageTitle, path);
-      emit('push', previous);
-    } else {
-      history.replaceState(_state, _state.pageTitle, path);
-      emit('set', previous);
+function updater(eventType, action) {
+  const push = eventType == 'push';
+  return function(path, state) {
+    if (/^[^/]/.test(path)) {
+      path = getPath(path);
     }
+    if (push && path == _path) {
+      return; // Avoid push if already there.
+    }
+    _state = createState(state);
+    if (push) {
+      // Remove dead path states.
+      const dead = 1 + _index - _chain.length;
+      if (dead !== 0) {
+        _chain.splice(_index, dead, _state);
+      } else {
+        _chain.push(_state);
+      }
+    } else {
+      _chain[_index] = _state;
+    }
+    history[action](_state, _state.title, _path);
+    observer(eventType, _state);
   }
 }
 
-function createState(state) {
-  if (!state) {
-    state = {};
+function createState(state = {}) {
+  state.session = _session;
+  if (!state.time) {
+    state.time = Date.now();
   }
-  state.time = Date.now();
-  state.depth = _depth;
-  if (!state.pageTitle) {
-    state.pageTitle = document.title;
+  if (!state.title) {
+    state.title = document.title;
   }
-  state.sessionId = _sessionId;
   return state;
 }
 
-function createMatcher(pattern, listener) {
-  if (pattern instanceof RegExp) {
-    return (path) => pattern.test(path) && listener;
-  }
-  if (pattern[0] == '#') {
-    return (path) => path.endsWith(pattern) && listener;
-  }
-  if (typeof pattern == 'string') {
-    return (path) => path == pattern && listener;
-  }
-  throw TypeError('Invalid pattern type: ' + (pattern != null ? typeof pattern : pattern));
+function setState(state = {}) {
+  state.time = _state.time;
+  _chain[_index] = _state = createState(state);
+  history.replaceState(_state, _state.title, _path);
 }
 
-function emit(eventId, previous) {
-  const path = _path;
-  const event = {
-    type: eventId,
-    path,
-    state: _state,
-    previous,
-  };
+// Insert a path state, unless it already exists.
+// Returns the new chain index.
+function insertState(state) {
+  const {time} = state;
 
-  nextTick(() => {
-    let listener, index = -1, stopped = false;
-    event.stopPropagation = () => { stopped = true };
-
-    // Avoid extra work if no previous path exists.
-    if (!previous) {
-      while (++index < observers.length) {
-        const observer = observers[index];
-        if (listener = observer(path)) {
-          listener(event, true);
-          if (stopped) break;
-        }
-      }
+  // Are we moving forward in time?
+  if (time > _state.time) {
+    // Are we at the end of the state chain?
+    if (_index == _chain.length - 1) {
+      _index = _chain.push(state) - 1;
+      return state;
     }
+    _index = search(_chain, (state) => {
+      return time <= state.time;
+    }, _index);
+  } else {
+    _index = searchUp(_chain, (state) => {
+      return time > state.time;
+    }, _index);
+  }
 
-    else {
-      // Collect listeners for the current path
-      // while calling listeners for the previous path.
-      const listeners = [];
-      while (++index < observers.length) {
-        const observer = observers[index];
-        if (listener = observer(path)) {
-          listeners.push(listener);
-        } else if (!stopped) {
-          if (listener = observer(previous)) {
-            listener(event, false);
-          }
-        }
-      }
+  // Does this state already exist?
+  if (time == _chain[_index].time) {
+    return _chain[_index];
+  }
 
-      // Call listeners for the current path.
-      if (listeners.length) {
-        index = -1;
-        stopped = false;
-        while (listener = listeners[++index]) {
-          listener(event, true);
-          if (stopped) break;
-        }
-      }
-    }
+  // Probably an orphan state.
+  _chain.splice(_index, 0, state);
+  return state;
+}
 
-    event.stopPropagation = undefined;
-    emitter.emit(eventId, event);
-  });
+// Search down an array.
+// When the given `test` function returns true, the current index is returned.
+// When no match is found, the length is returned.
+function search(arr, test, from) {
+  let i = from != null ? from : -1;
+  const len = arr.length;
+  if (i < len) {
+    i += 1;
+    do {
+      if (test(arr[i], i)) return i;
+    } while (++i !== len);
+  }
+  return len;
+}
+
+// Search up an array.
+// When the given `test` function returns true, the previous index is returned.
+// When no match is found, zero is returned.
+function searchUp(arr, test, from) {
+  let i = from != null ? from : arr.length;
+  if (i > 0) {
+    i -= 1;
+    do {
+      if (test(arr[i], i)) return i + 1;
+    } while (--i !== 0);
+  }
+  return 0;
 }

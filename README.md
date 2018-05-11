@@ -1,98 +1,89 @@
+# journey v2.0.0
 
-# journey v1.0.0
+Browser navigation enhanced.
 
-Manage your browser history with this simple library.
+- Timestamps
+- Hard-reload detection
+- Useful events: `back`, `forward`, `push`, `set`
 
-```js
-const journey = require('journey')
-```
+### observe(function)
 
-The `journey` object has the following properties:
+Get notified about navigation events.
+
+- `back` the user went back 1+ times in history using native controls
+- `forward` the user went forward 1+ times in history using native controls
+- `push` your code called the `push` method
+- `set` your code called the `set` method
+
+You must call `observe` only once. Within the observer, you can choose to
+emit to many listeners or do everything you need from a single module.
+
+The observer is called asynchronously, and is passed the `state` object.
+
+### push(path: string, state: ?object)
+
+Visit the given path.
+
+Under the hood, this calls the `history.pushState` method.
+
+The `path` argument must begin with `/` if you want to change the entire path.
+Otherwise, you will visit a path relative to the current path. This works for
+`#hash`, `?query`, and `subpath` strings. For example, if the current path is
+`/foo`, the previous strings navigate to `/foo#hash`, `/foo?query`, and `/foo/subpath`.
+
+### set(path: string, state: ?object)
+
+Change the path by overwriting the current point in history.
+
+The optional `state` will override the current state entirely.
+
+Under the hood, this calls the `history.replaceState` method.
+
+### back()
+
+Shortcut to `history.back`
+
+### forward()
+
+Shortcut to `history.forward`
+
+### get()
+
+Returns the cached result of `location.pathname + location.hash + location.search`
+
+### is(string)
+
+Shorthand for `journey.get() === "/path/"`
+
+### emit(id: string)
+
+### chain: object[]
+
+The array of "path states" visited in the current session.
+
+### index: number
+
+The current position in the `chain` array.
 
 ### state: object
 
-Each point in history can store a JSON object containing any relevant data.
-The `state` object contains the following properties by default:
-- `sessionId: number`
-- `time: number`
-- `depth: number`
-- `pageTitle: string`
+The current "path state", which is guaranteed to have the following properties:
 
-The `sessionId` is different between every hard reload. The `time` indicates
-in milliseconds when the last navigation event occurred. The `depth` indicates
-how many times the `back` method can be called. The `pageTitle` preserves
-the document title for each point in history.
+- `session: number` when the current session began
+- `time: number` when this path state was created
+- `title: string` the value of `document.title`
 
-### depth: number
+You can store anything JSON-compatible in this object, but you should use the
+`push` or `set` methods to do that. If you want to replace the entire state
+without changing the path, setting this property is the easiest way.
 
-The current history depth, which represents the number of times the `back`
-method can be called.
+### title: string
+
+Shortcut to `document.title`
+
+You should set this property instead of setting `document.title` directly
+so the history can be properly updated.
 
 ### origin: string
 
-The pathname where the session began.
-
----
-
-The `journey` object has the following methods:
-
-### here(): string
-
-The current pathname.
-
-### here(path: string, state: ?object): void
-
-Update the pathname by mutating the current point in history. In other words,
-using the `back` method won't reset the pathname to its previous value. You can
-optionally pass a `state` object, which replaces the current state.
-
-### isHere(pattern: string | RegExp): boolean
-
-Are we there yet? Returns `true` if the current pathname matches the given pattern.
-
-### visit(path: string, state: ?object): void
-
-Update the pathname by creating a new point in history. In other words,
-using the `back` method **will** reset the pathname to its previous value.
-You can optionally pass a `state` object, which must be compatible with
-`JSON.stringify` and will be preserved in case the user goes back.
-
-### back(): void
-
-Reset the pathname (and the `state` object) to its previous value. This is
-equivalent to the user pressing the browser's native back button.
-
-This method does nothing when the `depth` property equals zero.
-
-### emit(event: string, state: ?object): void
-
-Manually trigger an event.
-
-Valid events include: `set | push | pop`
-
-### on(event: string, listener: function): function
-
-Listen for an event.
-
-The `set` event indicates the pathname was replaced, but the `depth` remains
-the same. The `push` event indicates the pathname changed and the `depth` was
-incremented. The `pop` event indicates the pathname changed and the `depth` was
-decremented.
-
-The `listener` function is passed an event object that contains the following
-properties:
-- `type: string`
-- `path: string`
-- `state: object`
-- `previous: string`
-
-All events are not emitted until the next microtask. The best way to understand
-this behavior is to think of the event emitter being wrapped in a promise every
-time an event occurs.
-
-### observe(pattern: string | RegExp, listener: function): void
-
-Observe changes to the pathname. The given `listener` function is called
-when the pathname matches the given `pattern`. Observers cannot be stopped.
-The `listener` function is passed the same event object that an `on` listener
-would receive.
+The first path in the current session.
